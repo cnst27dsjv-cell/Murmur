@@ -1,0 +1,8 @@
+.build/
+.build-cache/
+.murmur-dev-data/
+.DS_Store
+
+# Local packaged builds
+dist/
+03_交付物/*.app
