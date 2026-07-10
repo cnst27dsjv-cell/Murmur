@@ -26,7 +26,7 @@ final class WidgetView: NSView {
     private let inlineShowNoteCheckbox = FirstMouseButton(checkboxWithTitle: "显示碎碎念", target: nil, action: nil)
     private let inlineShowTasksCheckbox = FirstMouseButton(checkboxWithTitle: "显示 to-do list", target: nil, action: nil)
     private let inlineExpandedCheckbox = FirstMouseButton(checkboxWithTitle: "展开完整组件", target: nil, action: nil)
-    private let inlineBlurredCheckbox = FirstMouseButton(checkboxWithTitle: "显示模糊封面", target: nil, action: nil)
+    private let inlineBlurredCheckbox = FirstMouseButton(checkboxWithTitle: "启用模糊封面", target: nil, action: nil)
     private let inlineTaskStack = NSStackView()
     private var inlineTaskFields: [UUID: NSTextField] = [:]
     private var inlineTaskChecks: [UUID: NSButton] = [:]
@@ -41,6 +41,8 @@ final class WidgetView: NSView {
     private var inlineUploadPetButton: NSButton?
     private var inlineClearPetButton: NSButton?
     private var isShowingInlineSettings = false
+    private var inlineDraftState: MurmurState?
+    private var inlineOriginalState: MurmurState?
     private var mouseDownScreenPoint: CGPoint?
     private var mouseDownWindowOrigin: CGPoint?
     private var mouseDownStartedInInlineSettings = false
@@ -75,7 +77,7 @@ final class WidgetView: NSView {
             }
         }
 
-        if !state.widget.isBlurred {
+        if !isEffectivelyBlurred(state) {
             let contentPoint = convert(point, to: contentStack)
             for subview in contentStack.arrangedSubviews {
                 let subviewPoint = contentStack.convert(contentPoint, to: subview)
@@ -139,11 +141,20 @@ final class WidgetView: NSView {
             return
         }
 
+        if handleContentTaskClick(at: point) {
+            return
+        }
+
         var nextState = state
         if petView.frame.contains(point) || !state.widget.isExpanded {
             nextState.widget.isExpanded.toggle()
-        } else {
+            if !nextState.cover.isEnabled {
+                nextState.widget.isBlurred = false
+            }
+        } else if state.cover.isEnabled {
             nextState.widget.isBlurred.toggle()
+        } else {
+            nextState.widget.isBlurred = false
         }
         onChange?(nextState)
     }
@@ -160,10 +171,12 @@ final class WidgetView: NSView {
         expandItem.target = self
         menu.addItem(expandItem)
 
-        let blurTitle = state.widget.isBlurred ? "Show Content" : "Hide Content"
-        let blurItem = NSMenuItem(title: blurTitle, action: #selector(toggleBlurredFromMenu), keyEquivalent: "")
-        blurItem.target = self
-        menu.addItem(blurItem)
+        if state.cover.isEnabled {
+            let blurTitle = isEffectivelyBlurred(state) ? "Show Content" : "Hide Content"
+            let blurItem = NSMenuItem(title: blurTitle, action: #selector(toggleBlurredFromMenu), keyEquivalent: "")
+            blurItem.target = self
+            menu.addItem(blurItem)
+        }
 
         menu.addItem(NSMenuItem.separator())
 
@@ -225,6 +238,7 @@ final class WidgetView: NSView {
         rebuildContent()
         coverView.apply(newState.cover)
         petView.apply(newState.pet)
+        let effectivelyBlurred = isEffectivelyBlurred(newState)
 
         cardView.layer?.cornerRadius = CGFloat(newState.widget.theme.cornerRadius)
         coverView.layer?.cornerRadius = CGFloat(newState.widget.theme.cornerRadius)
@@ -235,8 +249,8 @@ final class WidgetView: NSView {
         railLabel.isHidden = true
         settingsPanel.isHidden = !newState.widget.isExpanded || !isShowingInlineSettings
 
-        let coverAlpha = newState.widget.isBlurred ? 1.0 : 0.0
-        let contentAlpha = newState.widget.isBlurred ? 0.0 : 1.0
+        let coverAlpha = effectivelyBlurred ? 1.0 : 0.0
+        let contentAlpha = effectivelyBlurred ? 0.0 : 1.0
         contentStack.isHidden = !newState.widget.isExpanded || isShowingInlineSettings
         coverView.isHidden = !newState.widget.isExpanded || isShowingInlineSettings
         if animated {
@@ -247,18 +261,22 @@ final class WidgetView: NSView {
                 contentStack.animator().alphaValue = contentAlpha
             } completionHandler: { [weak self] in
                 DispatchQueue.main.async {
-                    self?.coverView.isHidden = !newState.widget.isExpanded || !newState.widget.isBlurred || (self?.isShowingInlineSettings ?? false)
-                    self?.contentStack.isHidden = !newState.widget.isExpanded || newState.widget.isBlurred || (self?.isShowingInlineSettings ?? false)
+                    self?.coverView.isHidden = !newState.widget.isExpanded || !effectivelyBlurred || (self?.isShowingInlineSettings ?? false)
+                    self?.contentStack.isHidden = !newState.widget.isExpanded || effectivelyBlurred || (self?.isShowingInlineSettings ?? false)
                 }
             }
         } else {
             coverView.alphaValue = coverAlpha
             contentStack.alphaValue = contentAlpha
-            coverView.isHidden = !newState.widget.isExpanded || !newState.widget.isBlurred || isShowingInlineSettings
-            contentStack.isHidden = !newState.widget.isExpanded || newState.widget.isBlurred || isShowingInlineSettings
+            coverView.isHidden = !newState.widget.isExpanded || !effectivelyBlurred || isShowingInlineSettings
+            contentStack.isHidden = !newState.widget.isExpanded || effectivelyBlurred || isShowingInlineSettings
         }
 
         needsLayout = true
+    }
+
+    private func isEffectivelyBlurred(_ state: MurmurState) -> Bool {
+        state.cover.isEnabled && state.widget.isBlurred
     }
 
     private func setupViews() {
@@ -311,19 +329,26 @@ final class WidgetView: NSView {
     }
 
     func showInlineSettings() {
+        if !isShowingInlineSettings {
+            inlineOriginalState = state
+        }
+
         isShowingInlineSettings = true
-        inlinePhraseField.stringValue = state.content.mainPhrase
-        inlineNoteField.stringValue = state.content.privateNote
-        inlineCoverField.stringValue = state.cover.text
-        inlineCoverModePopup.selectItem(at: state.cover.mode == .text ? 0 : 1)
-        inlinePetKindPopup.selectItem(at: state.pet.kind == .builtIn ? 0 : 1)
-        let poseIndex = PetPose.allCases.firstIndex(of: state.pet.pose) ?? 0
+        inlineDraftState = state
+        let draft = inlineDraftState ?? state
+
+        inlinePhraseField.stringValue = draft.content.mainPhrase
+        inlineNoteField.stringValue = draft.content.privateNote
+        inlineCoverField.stringValue = draft.cover.text
+        inlineCoverModePopup.selectItem(at: draft.cover.mode == .text ? 0 : 1)
+        inlinePetKindPopup.selectItem(at: draft.pet.kind == .builtIn ? 0 : 1)
+        let poseIndex = PetPose.allCases.firstIndex(of: draft.pet.pose) ?? 0
         inlinePetPosePopup.selectItem(at: poseIndex)
-        inlineShowPhraseCheckbox.state = state.content.showMainPhrase ? .on : .off
-        inlineShowNoteCheckbox.state = state.content.showPrivateNote ? .on : .off
-        inlineShowTasksCheckbox.state = state.content.showTasks ? .on : .off
+        inlineShowPhraseCheckbox.state = draft.content.showMainPhrase ? .on : .off
+        inlineShowNoteCheckbox.state = draft.content.showPrivateNote ? .on : .off
+        inlineShowTasksCheckbox.state = draft.content.showTasks ? .on : .off
         inlineExpandedCheckbox.state = .on
-        inlineBlurredCheckbox.state = state.widget.isBlurred ? .on : .off
+        inlineBlurredCheckbox.state = draft.cover.isEnabled ? .on : .off
         rebuildInlineTaskRows()
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -396,12 +421,13 @@ final class WidgetView: NSView {
                 contentStack.addArrangedSubview(empty)
             } else {
                 for task in visibleTasks {
-                    let button = NSButton(checkboxWithTitle: task.text, target: self, action: #selector(toggleTask(_:)))
+                    let button = FirstMouseButton(checkboxWithTitle: task.text, target: self, action: #selector(toggleTask(_:)))
                     button.identifier = NSUserInterfaceItemIdentifier(task.id.uuidString)
                     button.state = task.completed ? .on : .off
                     button.font = .systemFont(ofSize: sparseContent ? 16 : 14, weight: .regular)
                     button.allowsMixedState = false
                     button.controlSize = sparseContent ? .large : .regular
+                    button.sendAction(on: [.leftMouseUp])
                     button.widthAnchor.constraint(lessThanOrEqualToConstant: 410).isActive = true
                     contentStack.addArrangedSubview(button)
                 }
@@ -435,6 +461,29 @@ final class WidgetView: NSView {
         onChange?(nextState)
     }
 
+    private func handleContentTaskClick(at point: CGPoint) -> Bool {
+        guard state.widget.isExpanded, !isEffectivelyBlurred(state), !isShowingInlineSettings else { return false }
+
+        for subview in contentStack.arrangedSubviews {
+            guard let button = subview as? NSButton,
+                  let id = button.identifier?.rawValue,
+                  let uuid = UUID(uuidString: id),
+                  view(button, containsRootPoint: point, padding: 12)
+            else {
+                continue
+            }
+
+            var nextState = state
+            guard let index = nextState.content.tasks.firstIndex(where: { $0.id == uuid }) else { return false }
+            nextState.content.tasks[index].completed.toggle()
+            nextState.content.tasks[index].updatedAt = Date()
+            onChange?(nextState)
+            return true
+        }
+
+        return false
+    }
+
     @objc private func showInlineSettingsFromMenu() {
         showInlineSettings()
     }
@@ -447,6 +496,13 @@ final class WidgetView: NSView {
 
     @objc private func toggleBlurredFromMenu() {
         var nextState = state
+        guard nextState.cover.isEnabled else {
+            nextState.widget.isBlurred = false
+            nextState.widget.isExpanded = true
+            onChange?(nextState)
+            return
+        }
+
         nextState.widget.isBlurred.toggle()
         if !nextState.widget.isExpanded {
             nextState.widget.isExpanded = true
@@ -461,14 +517,22 @@ final class WidgetView: NSView {
     }
 
     @objc private func saveInlineSettings() {
-        let nextState = collectInlineSettings()
+        var nextState = collectInlineSettings()
+        if !nextState.cover.isEnabled {
+            nextState.widget.isBlurred = false
+        }
+        inlineDraftState = nil
+        inlineOriginalState = nil
         isShowingInlineSettings = false
         onChange?(nextState)
     }
 
     @objc private func closeInlineSettings() {
+        let restoredState = inlineOriginalState ?? state
+        inlineDraftState = nil
+        inlineOriginalState = nil
         isShowingInlineSettings = false
-        apply(state)
+        onChange?(restoredState)
     }
 
     @objc private func quitFromInlineSettings() {
@@ -491,7 +555,7 @@ final class WidgetView: NSView {
 
         nextState.cover.mode = .image
         nextState.cover.imagePath = path
-        state = nextState
+        inlineDraftState = nextState
         inlineCoverModePopup.selectItem(at: 1)
     }
 
@@ -499,7 +563,7 @@ final class WidgetView: NSView {
         var nextState = collectInlineSettings()
         nextState.cover.imagePath = nil
         nextState.cover.mode = .text
-        state = nextState
+        inlineDraftState = nextState
         inlineCoverModePopup.selectItem(at: 0)
     }
 
@@ -516,24 +580,21 @@ final class WidgetView: NSView {
 
         nextState.pet.kind = .customImage
         nextState.pet.imagePath = path
-        state = nextState
+        inlineDraftState = nextState
         inlinePetKindPopup.selectItem(at: 1)
-        onChange?(nextState)
     }
 
     @objc private func clearInlinePetImage() {
         var nextState = collectInlineSettings()
         nextState.pet.kind = .builtIn
         nextState.pet.imagePath = nil
-        state = nextState
+        inlineDraftState = nextState
         inlinePetKindPopup.selectItem(at: 0)
-        onChange?(nextState)
     }
 
     @objc private func updateInlinePetKindPreview() {
         let nextState = collectInlineSettings()
-        state = nextState
-        onChange?(nextState)
+        inlineDraftState = nextState
     }
 
     @objc private func updateInlinePetPosePreview() {
@@ -541,26 +602,28 @@ final class WidgetView: NSView {
         nextState.pet.kind = .builtIn
         nextState.pet.imagePath = nil
         inlinePetKindPopup.selectItem(at: 0)
-        state = nextState
-        onChange?(nextState)
+        inlineDraftState = nextState
     }
 
     @objc private func addInlineTask() {
-        state = collectInlineSettings()
-        state.content.tasks.append(TaskItem(text: "New to-do"))
+        var nextState = collectInlineSettings()
+        nextState.content.tasks.append(TaskItem(text: "New to-do"))
+        inlineDraftState = nextState
         rebuildInlineTaskRows()
     }
 
     @objc private func deleteInlineTask(_ sender: NSButton) {
         guard let rawValue = sender.identifier?.rawValue, let id = UUID(uuidString: rawValue) else { return }
-        state = collectInlineSettings()
-        state.content.tasks.removeAll { $0.id == id }
+        var nextState = collectInlineSettings()
+        nextState.content.tasks.removeAll { $0.id == id }
+        inlineDraftState = nextState
         rebuildInlineTaskRows()
     }
 
     @objc private func deleteCompletedInlineTasks() {
-        state = collectInlineSettings()
-        state.content.tasks.removeAll { $0.completed }
+        var nextState = collectInlineSettings()
+        nextState.content.tasks.removeAll { $0.completed }
+        inlineDraftState = nextState
         rebuildInlineTaskRows()
     }
 
@@ -570,10 +633,12 @@ final class WidgetView: NSView {
         switch target {
         case .toggle(let checkbox):
             checkbox.state = checkbox.state == .on ? .off : .on
+            inlineDraftState = collectInlineSettings()
             return true
         case .deleteTask(let id):
-            state = collectInlineSettings()
-            state.content.tasks.removeAll { $0.id == id }
+            var nextState = collectInlineSettings()
+            nextState.content.tasks.removeAll { $0.id == id }
+            inlineDraftState = nextState
             rebuildInlineTaskRows()
             return true
         case .textField(let field):
@@ -947,7 +1012,9 @@ final class WidgetView: NSView {
         inlineTaskChecks.removeAll()
         inlineTaskDeleteButtons.removeAll()
 
-        if state.content.tasks.isEmpty {
+        let workingState = inlineDraftState ?? state
+
+        if workingState.content.tasks.isEmpty {
             let empty = NSTextField(labelWithString: "暂无 to-do，点击“新增 to-do”。")
             empty.font = .systemFont(ofSize: 12)
             empty.textColor = .secondaryLabelColor
@@ -955,7 +1022,7 @@ final class WidgetView: NSView {
             return
         }
 
-        for task in state.content.tasks {
+        for task in workingState.content.tasks {
             inlineTaskStack.addArrangedSubview(inlineTaskRow(task))
         }
     }
@@ -995,12 +1062,13 @@ final class WidgetView: NSView {
     }
 
     private func collectInlineSettings() -> MurmurState {
-        var nextState = state
+        var nextState = inlineDraftState ?? state
         nextState.content.mainPhrase = inlinePhraseField.stringValue
         nextState.content.privateNote = inlineNoteField.stringValue
         nextState.content.showMainPhrase = inlineShowPhraseCheckbox.state == .on
         nextState.content.showPrivateNote = inlineShowNoteCheckbox.state == .on
         nextState.content.showTasks = inlineShowTasksCheckbox.state == .on
+        nextState.cover.isEnabled = inlineBlurredCheckbox.state == .on
         nextState.cover.text = inlineCoverField.stringValue
         nextState.cover.mode = inlineCoverModePopup.indexOfSelectedItem == 0 ? .text : .image
         nextState.pet.kind = inlinePetKindPopup.indexOfSelectedItem == 0 ? .builtIn : .customImage
@@ -1009,7 +1077,7 @@ final class WidgetView: NSView {
             nextState.pet.pose = PetPose.allCases[poseIndex]
         }
         nextState.widget.isExpanded = inlineExpandedCheckbox.state == .on
-        nextState.widget.isBlurred = inlineBlurredCheckbox.state == .on
+        nextState.widget.isBlurred = nextState.cover.isEnabled
 
         for index in nextState.content.tasks.indices {
             let id = nextState.content.tasks[index].id

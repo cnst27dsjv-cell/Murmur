@@ -122,9 +122,32 @@ struct TaskItem: Codable, Identifiable {
 }
 
 struct CoverState: Codable {
+    var isEnabled: Bool
     var mode: CoverMode
     var text: String
     var imagePath: String?
+
+    init(mode: CoverMode, text: String, imagePath: String?, isEnabled: Bool = true) {
+        self.isEnabled = isEnabled
+        self.mode = mode
+        self.text = text
+        self.imagePath = imagePath
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case isEnabled
+        case mode
+        case text
+        case imagePath
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        mode = try container.decode(CoverMode.self, forKey: .mode)
+        text = try container.decode(String.self, forKey: .text)
+        imagePath = try container.decodeIfPresent(String.self, forKey: .imagePath)
+    }
 }
 
 enum CoverMode: String, Codable, CaseIterable {

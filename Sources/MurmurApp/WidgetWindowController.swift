@@ -14,7 +14,9 @@ final class WidgetWindowController: NSWindowController, NSWindowDelegate {
 
     init(state: MurmurState, store: AppStore) {
         var initialState = state
-        initialState.widget.frame = StoredFrame(Self.frame(for: initialState, near: state.widget.frame.cgRect))
+        let initialFrame = Self.frame(for: initialState, near: state.widget.frame.cgRect)
+        initialState.widget.frame = StoredFrame(initialFrame)
+        initialState.pet.edge = Self.petEdge(for: initialFrame)
 
         self.state = initialState
         self.store = store
@@ -76,7 +78,9 @@ final class WidgetWindowController: NSWindowController, NSWindowDelegate {
 
     func apply(_ newState: MurmurState) {
         var adjustedState = newState
-        adjustedState.widget.frame = StoredFrame(Self.frame(for: adjustedState, near: window?.frame ?? newState.widget.frame.cgRect))
+        let adjustedFrame = Self.frame(for: adjustedState, near: window?.frame ?? newState.widget.frame.cgRect)
+        adjustedState.widget.frame = StoredFrame(adjustedFrame)
+        adjustedState.pet.edge = Self.petEdge(for: adjustedFrame)
 
         state = adjustedState
         window?.setFrame(adjustedState.widget.frame.cgRect, display: true, animate: true)
@@ -124,6 +128,11 @@ final class WidgetWindowController: NSWindowController, NSWindowDelegate {
         let y = min(max(proposedY, screenFrame.minY + Layout.edgeInset), screenFrame.maxY - size.height - Layout.edgeInset)
 
         return CGRect(x: x, y: y, width: size.width, height: size.height)
+    }
+
+    private static func petEdge(for frame: CGRect) -> PetEdge {
+        let screenFrame = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        return frame.midX < screenFrame.midX ? .topRight : .topLeft
     }
 }
 
