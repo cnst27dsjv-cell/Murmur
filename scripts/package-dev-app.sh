@@ -16,6 +16,7 @@ swift build --disable-sandbox --scratch-path "$BUILD_DIR"
 
 cp "$BUILD_DIR/debug/MurmurApp" "$MACOS_DIR/MurmurApp"
 cp "$ROOT_DIR/Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
+cp "$ROOT_DIR/Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 rm -rf "$RESOURCES_DIR/Pets"
 cp -R "$ROOT_DIR/Resources/Pets" "$RESOURCES_DIR/Pets"
 printf "APPL????" > "$CONTENTS_DIR/PkgInfo"
