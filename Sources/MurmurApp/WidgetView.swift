@@ -12,6 +12,7 @@ final class WidgetView: NSView {
     private let railGripView = RailGripView()
     private let railLabel = NSTextField(labelWithString: "Murmur")
     private let contentStack = NSStackView()
+    private let themeBackgroundView = WidgetThemeBackgroundView()
     private let coverView = CoverView()
     private let petView = PetView()
     private let settingsPanel = NSVisualEffectView()
@@ -19,6 +20,7 @@ final class WidgetView: NSView {
     private let inlinePhraseField = FirstMouseTextField()
     private let inlineNoteField = FirstMouseTextField()
     private let inlineCoverField = FirstMouseTextField()
+    private let inlineThemePopup = FirstMousePopUpButton()
     private let inlineCoverModePopup = FirstMousePopUpButton()
     private let inlinePetKindPopup = FirstMousePopUpButton()
     private let inlinePetPosePopup = FirstMousePopUpButton()
@@ -33,6 +35,8 @@ final class WidgetView: NSView {
     private var inlineTaskDeleteButtons: [UUID: NSButton] = [:]
     private var inlineUploadCoverButton: NSButton?
     private var inlineClearCoverButton: NSButton?
+    private var inlineUploadCoverBackgroundButton: NSButton?
+    private var inlineClearCoverBackgroundButton: NSButton?
     private var inlineAddTaskButton: NSButton?
     private var inlineDeleteCompletedButton: NSButton?
     private var inlineSaveButton: NSButton?
@@ -78,10 +82,9 @@ final class WidgetView: NSView {
         }
 
         if !isEffectivelyBlurred(state) {
-            let contentPoint = convert(point, to: contentStack)
-            for subview in contentStack.arrangedSubviews {
-                let subviewPoint = contentStack.convert(contentPoint, to: subview)
-                if let button = subview as? NSButton, let hitView = button.hitTest(subviewPoint) {
+            for button in contentTaskButtons(in: contentStack) {
+                let buttonPoint = convert(point, to: button)
+                if let hitView = button.hitTest(buttonPoint) {
                     return hitView
                 }
             }
@@ -146,7 +149,8 @@ final class WidgetView: NSView {
         }
 
         var nextState = state
-        if petView.frame.contains(point) || !state.widget.isExpanded {
+        let didUsePetInteraction = petView.frame.contains(point) || !state.widget.isExpanded
+        if didUsePetInteraction {
             nextState.widget.isExpanded.toggle()
             if !nextState.cover.isEnabled {
                 nextState.widget.isBlurred = false
@@ -157,6 +161,23 @@ final class WidgetView: NSView {
             nextState.widget.isBlurred = false
         }
         onChange?(nextState)
+        if didUsePetInteraction {
+            petView.playInteraction(.tap)
+        }
+    }
+
+    private func contentFrame(for theme: WidgetTheme, in rect: CGRect) -> CGRect {
+        if theme == .polaroid {
+            let paper = rect.insetBy(dx: 28, dy: 20)
+            return CGRect(
+                x: paper.minX + 38,
+                y: paper.minY + 12,
+                width: paper.width - 72,
+                height: 104
+            )
+        }
+
+        return rect.insetBy(dx: 26, dy: 24)
     }
 
     override func rightMouseDown(with event: NSEvent) {
@@ -204,8 +225,9 @@ final class WidgetView: NSView {
         if state.widget.isExpanded {
             let cardInset: CGFloat = 20
             cardView.frame = CGRect(x: cardInset, y: 24, width: bounds.width - cardInset * 2, height: 390)
+            themeBackgroundView.frame = cardView.bounds
             coverView.frame = cardView.bounds
-            contentStack.frame = cardView.bounds.insetBy(dx: 26, dy: 24)
+            contentStack.frame = contentFrame(for: state.widget.theme.style, in: cardView.bounds)
             settingsPanel.frame = cardView.bounds.insetBy(dx: 16, dy: 16)
 
             switch state.pet.edge {
@@ -218,6 +240,7 @@ final class WidgetView: NSView {
             }
         } else {
             cardView.frame = .zero
+            themeBackgroundView.frame = .zero
             coverView.frame = .zero
             contentStack.frame = .zero
             settingsPanel.frame = .zero
@@ -236,13 +259,17 @@ final class WidgetView: NSView {
     func apply(_ newState: MurmurState, animated: Bool = true) {
         state = newState
         rebuildContent()
-        coverView.apply(newState.cover)
+        themeBackgroundView.apply(newState.widget.theme)
+        coverView.apply(cover: newState.cover, theme: newState.widget.theme)
         petView.apply(newState.pet)
         let effectivelyBlurred = isEffectivelyBlurred(newState)
 
         cardView.layer?.cornerRadius = CGFloat(newState.widget.theme.cornerRadius)
         coverView.layer?.cornerRadius = CGFloat(newState.widget.theme.cornerRadius)
-        cardView.alphaValue = CGFloat(newState.widget.theme.transparency)
+        themeBackgroundView.layer?.cornerRadius = CGFloat(newState.widget.theme.cornerRadius)
+        cardView.alphaValue = newState.widget.theme.style == .magazine
+            ? CGFloat(newState.widget.theme.transparency)
+            : 0.98
         cardView.isHidden = !newState.widget.isExpanded
         railView.isHidden = true
         railGripView.isHidden = true
@@ -319,6 +346,8 @@ final class WidgetView: NSView {
         contentStack.alignment = .leading
         contentStack.spacing = 12
         contentStack.distribution = .gravityAreas
+        themeBackgroundView.wantsLayer = true
+        cardView.addSubview(themeBackgroundView)
         cardView.addSubview(contentStack)
 
         coverView.wantsLayer = true
@@ -340,6 +369,9 @@ final class WidgetView: NSView {
         inlinePhraseField.stringValue = draft.content.mainPhrase
         inlineNoteField.stringValue = draft.content.privateNote
         inlineCoverField.stringValue = draft.cover.text
+        let themeIndex = WidgetTheme.allCases.firstIndex(of: draft.widget.theme.style) ?? 0
+        inlineThemePopup.selectItem(at: themeIndex)
+        updateThemeBackgroundControls(for: draft.widget.theme.style)
         inlineCoverModePopup.selectItem(at: draft.cover.mode == .text ? 0 : 1)
         inlinePetKindPopup.selectItem(at: draft.pet.kind == .builtIn ? 0 : 1)
         let poseIndex = PetPose.allCases.firstIndex(of: draft.pet.pose) ?? 0
@@ -370,6 +402,13 @@ final class WidgetView: NSView {
             view.removeFromSuperview()
         }
 
+        if state.widget.theme.style == .polaroid {
+            rebuildPolaroidContent()
+            return
+        }
+
+        contentStack.orientation = .vertical
+        contentStack.distribution = .gravityAreas
         let visibleTasks = state.content.showTasks ? Array(state.content.tasks.prefix(5)) : []
         let mainText = state.content.mainPhrase.isEmpty ? "Murmur" : state.content.mainPhrase
         let noteText = state.content.privateNote.isEmpty ? "A softer place for things I want to remember." : state.content.privateNote
@@ -388,8 +427,8 @@ final class WidgetView: NSView {
 
         if state.content.showMainPhrase {
             let title = NSTextField(labelWithString: mainText)
-            title.font = displayFont(ofSize: sparseContent ? 40 : 30, weight: .bold)
-            title.textColor = NSColor.labelColor.withAlphaComponent(0.94)
+            title.font = themeTitleFont(size: sparseContent ? 40 : 30)
+            title.textColor = themePrimaryTextColor
             title.maximumNumberOfLines = sparseContent ? 2 : 3
             title.lineBreakMode = .byWordWrapping
             title.widthAnchor.constraint(equalToConstant: 410).isActive = true
@@ -399,8 +438,8 @@ final class WidgetView: NSView {
 
         if state.content.showPrivateNote {
             let note = NSTextField(labelWithString: noteText)
-            note.font = .systemFont(ofSize: sparseContent ? 18 : 15, weight: .medium)
-            note.textColor = NSColor.labelColor.withAlphaComponent(0.64)
+            note.font = themeSecondaryFont(size: sparseContent ? 18 : 15)
+            note.textColor = themeSecondaryTextColor
             note.maximumNumberOfLines = sparseContent ? 3 : 2
             note.lineBreakMode = .byWordWrapping
             note.widthAnchor.constraint(equalToConstant: 410).isActive = true
@@ -411,20 +450,22 @@ final class WidgetView: NSView {
         if state.content.showTasks {
             let separator = NSBox()
             separator.boxType = .separator
+            separator.alphaValue = state.widget.theme.style == .corkboard ? 0.45 : 0.72
             separator.widthAnchor.constraint(equalToConstant: 410).isActive = true
             contentStack.addArrangedSubview(separator)
 
             if state.content.tasks.isEmpty {
                 let empty = NSTextField(labelWithString: "No tasks yet.")
                 empty.font = .systemFont(ofSize: sparseContent ? 15 : 13, weight: .regular)
-                empty.textColor = .secondaryLabelColor
+                empty.textColor = themeSecondaryTextColor
                 contentStack.addArrangedSubview(empty)
             } else {
                 for task in visibleTasks {
                     let button = FirstMouseButton(checkboxWithTitle: task.text, target: self, action: #selector(toggleTask(_:)))
                     button.identifier = NSUserInterfaceItemIdentifier(task.id.uuidString)
                     button.state = task.completed ? .on : .off
-                    button.font = .systemFont(ofSize: sparseContent ? 16 : 14, weight: .regular)
+                    button.font = themeTaskFont(size: sparseContent ? 16 : 14)
+                    button.contentTintColor = themeAccentColor
                     button.allowsMixedState = false
                     button.controlSize = sparseContent ? .large : .regular
                     button.sendAction(on: [.leftMouseUp])
@@ -438,7 +479,7 @@ final class WidgetView: NSView {
         if !didAddContent {
             let empty = NSTextField(labelWithString: "Everything is hidden. Open Settings to choose what to show.")
             empty.font = .systemFont(ofSize: 15, weight: .regular)
-            empty.textColor = .secondaryLabelColor
+            empty.textColor = themeSecondaryTextColor
             empty.maximumNumberOfLines = 2
             empty.widthAnchor.constraint(equalToConstant: 410).isActive = true
             contentStack.addArrangedSubview(empty)
@@ -447,26 +488,119 @@ final class WidgetView: NSView {
         contentStack.addArrangedSubview(spacer(height: sparseContent ? 6 : 2))
 
         let hint = NSTextField(labelWithString: "Right-click or use menu bar for settings")
-        hint.font = .systemFont(ofSize: 11, weight: .medium)
-        hint.textColor = NSColor.tertiaryLabelColor
+        hint.font = themeSecondaryFont(size: 11)
+        hint.textColor = themeSecondaryTextColor.withAlphaComponent(0.68)
         contentStack.addArrangedSubview(hint)
+    }
+
+    private func rebuildPolaroidContent() {
+        let visibleTasks = state.content.showTasks ? state.content.tasks : []
+        let mainText = state.content.mainPhrase.isEmpty ? "Murmur" : state.content.mainPhrase
+        let noteText = state.content.privateNote.isEmpty ? "Collect beautiful moments." : state.content.privateNote
+
+        contentStack.orientation = .horizontal
+        contentStack.alignment = .top
+        contentStack.spacing = 12
+        contentStack.distribution = .fill
+
+        let captionStack = NSStackView()
+        captionStack.orientation = .vertical
+        captionStack.alignment = .leading
+        captionStack.spacing = 3
+        captionStack.widthAnchor.constraint(equalToConstant: 172).isActive = true
+
+        var didAddContent = false
+        if state.content.showMainPhrase {
+            let title = NSTextField(labelWithString: mainText)
+            title.font = themeTitleFont(size: mainText.count <= 14 ? 22 : 18)
+            title.textColor = themePrimaryTextColor
+            title.maximumNumberOfLines = 1
+            title.lineBreakMode = .byTruncatingTail
+            title.widthAnchor.constraint(equalToConstant: 172).isActive = true
+            captionStack.addArrangedSubview(title)
+            didAddContent = true
+        }
+
+        if state.content.showPrivateNote {
+            let note = NSTextField(labelWithString: noteText)
+            note.font = themeSecondaryFont(size: noteText.count <= 34 ? 15 : 13)
+            note.textColor = themeSecondaryTextColor
+            note.maximumNumberOfLines = 2
+            note.lineBreakMode = .byWordWrapping
+            note.widthAnchor.constraint(equalToConstant: 172).isActive = true
+            captionStack.addArrangedSubview(note)
+            didAddContent = true
+        }
+
+        let taskStack = NSStackView()
+        taskStack.orientation = .vertical
+        taskStack.alignment = .leading
+        let taskMetrics = polaroidTaskMetrics(count: visibleTasks.count)
+        taskStack.spacing = taskMetrics.spacing
+        taskStack.widthAnchor.constraint(equalToConstant: 160).isActive = true
+
+        if state.content.showTasks {
+            for task in visibleTasks {
+                let button = FirstMouseButton(checkboxWithTitle: task.text, target: self, action: #selector(toggleTask(_:)))
+                button.identifier = NSUserInterfaceItemIdentifier(task.id.uuidString)
+                button.state = task.completed ? .on : .off
+                button.font = themeTaskFont(size: taskMetrics.fontSize)
+                button.contentTintColor = themeAccentColor
+                button.allowsMixedState = false
+                button.controlSize = .regular
+                button.sendAction(on: [.leftMouseUp])
+                button.widthAnchor.constraint(equalToConstant: 160).isActive = true
+                button.heightAnchor.constraint(equalToConstant: taskMetrics.rowHeight).isActive = true
+                taskStack.addArrangedSubview(button)
+            }
+            didAddContent = true
+        }
+
+        if !didAddContent {
+            let empty = NSTextField(labelWithString: "Open Settings to choose what to show.")
+            empty.font = themeSecondaryFont(size: 12)
+            empty.textColor = themeSecondaryTextColor
+            empty.widthAnchor.constraint(equalToConstant: 320).isActive = true
+            captionStack.addArrangedSubview(empty)
+        }
+
+        contentStack.addArrangedSubview(captionStack)
+        if state.content.showTasks, !visibleTasks.isEmpty {
+            contentStack.addArrangedSubview(taskStack)
+        }
+    }
+
+    private func polaroidTaskMetrics(count: Int) -> (fontSize: CGFloat, rowHeight: CGFloat, spacing: CGFloat) {
+        switch count {
+        case 0...3:
+            return (15, 25, 4)
+        case 4...5:
+            return (12.5, 18, 1)
+        case 6...7:
+            return (10.5, 14, 0)
+        default:
+            return (9.5, 12, 0)
+        }
     }
 
     @objc private func toggleTask(_ sender: NSButton) {
         guard let id = sender.identifier?.rawValue, let uuid = UUID(uuidString: id) else { return }
         var nextState = state
         guard let index = nextState.content.tasks.firstIndex(where: { $0.id == uuid }) else { return }
+        let wasCompleted = nextState.content.tasks[index].completed
         nextState.content.tasks[index].completed = sender.state == .on
         nextState.content.tasks[index].updatedAt = Date()
         onChange?(nextState)
+        if !wasCompleted && nextState.content.tasks[index].completed {
+            petView.playInteraction(.cheer)
+        }
     }
 
     private func handleContentTaskClick(at point: CGPoint) -> Bool {
         guard state.widget.isExpanded, !isEffectivelyBlurred(state), !isShowingInlineSettings else { return false }
 
-        for subview in contentStack.arrangedSubviews {
-            guard let button = subview as? NSButton,
-                  let id = button.identifier?.rawValue,
+        for button in contentTaskButtons(in: contentStack) {
+            guard let id = button.identifier?.rawValue,
                   let uuid = UUID(uuidString: id),
                   view(button, containsRootPoint: point, padding: 12)
             else {
@@ -475,13 +609,28 @@ final class WidgetView: NSView {
 
             var nextState = state
             guard let index = nextState.content.tasks.firstIndex(where: { $0.id == uuid }) else { return false }
+            let wasCompleted = nextState.content.tasks[index].completed
             nextState.content.tasks[index].completed.toggle()
             nextState.content.tasks[index].updatedAt = Date()
             onChange?(nextState)
+            if !wasCompleted && nextState.content.tasks[index].completed {
+                petView.playInteraction(.cheer)
+            }
             return true
         }
 
         return false
+    }
+
+    private func contentTaskButtons(in view: NSView) -> [NSButton] {
+        var buttons: [NSButton] = []
+        for subview in view.subviews {
+            if let button = subview as? NSButton, button.identifier?.rawValue != nil {
+                buttons.append(button)
+            }
+            buttons.append(contentsOf: contentTaskButtons(in: subview))
+        }
+        return buttons
     }
 
     @objc private func showInlineSettingsFromMenu() {
@@ -565,6 +714,55 @@ final class WidgetView: NSView {
         nextState.cover.mode = .text
         inlineDraftState = nextState
         inlineCoverModePopup.selectItem(at: 0)
+    }
+
+    @objc private func chooseInlineCoverBackgroundImage() {
+        var nextState = collectInlineSettings()
+        guard nextState.widget.theme.style.allowsCustomBackground else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+
+        guard panel.runModal() == .OK, let path = panel.url?.path else {
+            return
+        }
+
+        nextState.widget.theme.backgroundImagePath = path
+        inlineDraftState = nextState
+    }
+
+    @objc private func clearInlineCoverBackgroundImage() {
+        var nextState = collectInlineSettings()
+        nextState.widget.theme.backgroundImagePath = nil
+        inlineDraftState = nextState
+    }
+
+    @objc private func updateInlineThemePreview() {
+        var nextState = collectInlineSettings()
+        updateThemeBackgroundControls(for: nextState.widget.theme.style)
+        if !nextState.widget.theme.style.allowsCustomBackground {
+            nextState.widget.theme.backgroundImagePath = nil
+        }
+        inlineDraftState = nextState
+    }
+
+    private func updateThemeBackgroundControls(for theme: WidgetTheme) {
+        let enabled = theme.allowsCustomBackground
+        inlineUploadCoverBackgroundButton?.isEnabled = enabled
+        inlineClearCoverBackgroundButton?.isEnabled = enabled
+        if theme == .polaroid {
+            inlineUploadCoverBackgroundButton?.title = "更换拍立得照片"
+            inlineClearCoverBackgroundButton?.title = "清除拍立得照片"
+        } else {
+            inlineUploadCoverBackgroundButton?.title = "更换主题背景"
+            inlineClearCoverBackgroundButton?.title = "清除主题背景"
+        }
+        let hint = theme == .polaroid
+            ? "拍立得主题会把图片放进中央相片区"
+            : (enabled ? "为当前主题更换背景图片" : "牛皮纸主题使用固定纸纹")
+        inlineUploadCoverBackgroundButton?.toolTip = hint
+        inlineClearCoverBackgroundButton?.toolTip = hint
     }
 
     @objc private func chooseInlinePetImage() {
@@ -665,6 +863,11 @@ final class WidgetView: NSView {
     private func inlineClickTarget(at point: CGPoint) -> InlineClickTarget? {
         guard isShowingInlineSettings, settingsPanel.frame.contains(point) else { return nil }
 
+        let popups = [inlineThemePopup, inlineCoverModePopup, inlinePetKindPopup, inlinePetPosePopup]
+        for popup in popups where view(popup, containsRootPoint: point, padding: 0) {
+            return .popup(popup)
+        }
+
         let textFields = [inlinePhraseField, inlineNoteField, inlineCoverField] + Array(inlineTaskFields.values)
         for field in textFields {
             if view(field, containsRootPoint: point, padding: 14) {
@@ -695,6 +898,8 @@ final class WidgetView: NSView {
         let buttons = [
             inlineUploadCoverButton,
             inlineClearCoverButton,
+            inlineUploadCoverBackgroundButton,
+            inlineClearCoverBackgroundButton,
             inlineAddTaskButton,
             inlineDeleteCompletedButton,
             inlineSaveButton,
@@ -708,8 +913,10 @@ final class WidgetView: NSView {
             return .button(button)
         }
 
-        let popups = [inlineCoverModePopup, inlinePetKindPopup, inlinePetPosePopup]
-        for popup in popups where view(popup, containsRootPoint: point, padding: 14) {
+        let nearbyPopups = popups.filter { view($0, containsRootPoint: point, padding: 10) }
+        if let popup = nearbyPopups.min(by: {
+            distanceSquared(from: point, to: $0) < distanceSquared(from: point, to: $1)
+        }) {
             return .popup(popup)
         }
 
@@ -720,6 +927,15 @@ final class WidgetView: NSView {
         guard !view.isHidden, view.window != nil else { return false }
         let localPoint = convert(point, to: view)
         return view.bounds.insetBy(dx: -padding, dy: -padding).contains(localPoint)
+    }
+
+    private func distanceSquared(from point: CGPoint, to view: NSView) -> CGFloat {
+        let rect = view.convert(view.bounds, to: self)
+        let nearestX = min(max(point.x, rect.minX), rect.maxX)
+        let nearestY = min(max(point.y, rect.minY), rect.maxY)
+        let deltaX = point.x - nearestX
+        let deltaY = point.y - nearestY
+        return deltaX * deltaX + deltaY * deltaY
     }
 
     private func setupInlineSettings() {
@@ -776,12 +992,20 @@ final class WidgetView: NSView {
             checkbox.allowsMixedState = false
         }
 
+        inlineThemePopup.addItems(withTitles: WidgetTheme.allCases.map(Self.widgetThemeTitle))
+        inlineThemePopup.isEnabled = true
+        inlineThemePopup.target = self
+        inlineThemePopup.action = #selector(updateInlineThemePreview)
         inlineCoverModePopup.addItems(withTitles: ["文字封面", "图片封面"])
         inlineCoverModePopup.isEnabled = true
         let uploadCoverButton = inlineButton("上传封面图片", action: #selector(chooseInlineCoverImage))
         let clearCoverButton = inlineButton("清除封面图片", action: #selector(clearInlineCoverImage))
+        let uploadCoverBackgroundButton = inlineButton("更换主题背景", action: #selector(chooseInlineCoverBackgroundImage))
+        let clearCoverBackgroundButton = inlineButton("清除主题背景", action: #selector(clearInlineCoverBackgroundImage))
         inlineUploadCoverButton = uploadCoverButton
         inlineClearCoverButton = clearCoverButton
+        inlineUploadCoverBackgroundButton = uploadCoverBackgroundButton
+        inlineClearCoverBackgroundButton = clearCoverBackgroundButton
 
         inlinePetKindPopup.addItems(withTitles: ["内置小猫", "自定义图片"])
         inlinePetKindPopup.isEnabled = true
@@ -826,8 +1050,16 @@ final class WidgetView: NSView {
             ]
         ))
         stack.addArrangedSubview(settingsSection(
+            title: "Theme",
+            subtitle: "主题决定整个组件的框体、排版与材质。牛皮纸使用固定纸纹。",
+            arrangedSubviews: [
+                inlineRow("组件主题", inlineThemePopup),
+                inlineButtonRow([uploadCoverBackgroundButton, clearCoverBackgroundButton])
+            ]
+        ))
+        stack.addArrangedSubview(settingsSection(
             title: "Cover",
-            subtitle: "设置模糊封面中央显示什么。",
+            subtitle: "设置模糊封面中央显示的文字或图片。",
             arrangedSubviews: [
                 inlineRow("封面类型", inlineCoverModePopup),
                 inlineRow("封面文案", inlineCoverField),
@@ -873,6 +1105,94 @@ final class WidgetView: NSView {
         }
 
         return .systemFont(ofSize: size, weight: weight)
+    }
+
+    private var themePrimaryTextColor: NSColor {
+        switch state.widget.theme.style {
+        case .corkboard:
+            return NSColor.white.withAlphaComponent(0.94)
+        case .kraft:
+            return NSColor(calibratedRed: 0.14, green: 0.09, blue: 0.05, alpha: 0.92)
+        case .polaroid:
+            return NSColor(calibratedRed: 0.13, green: 0.11, blue: 0.09, alpha: 0.92)
+        default:
+            return NSColor.labelColor.withAlphaComponent(0.94)
+        }
+    }
+
+    private var themeSecondaryTextColor: NSColor {
+        switch state.widget.theme.style {
+        case .corkboard:
+            return NSColor.white.withAlphaComponent(0.74)
+        case .kraft:
+            return NSColor(calibratedRed: 0.16, green: 0.10, blue: 0.06, alpha: 0.72)
+        case .polaroid:
+            return NSColor(calibratedRed: 0.22, green: 0.18, blue: 0.14, alpha: 0.70)
+        case .collage:
+            return NSColor(calibratedRed: 0.22, green: 0.18, blue: 0.15, alpha: 0.68)
+        default:
+            return NSColor.labelColor.withAlphaComponent(0.64)
+        }
+    }
+
+    private var themeAccentColor: NSColor {
+        switch state.widget.theme.style {
+        case .kraft:
+            return NSColor(calibratedRed: 0.30, green: 0.20, blue: 0.10, alpha: 0.90)
+        case .polaroid:
+            return NSColor(calibratedRed: 0.50, green: 0.38, blue: 0.30, alpha: 0.96)
+        case .collage:
+            return NSColor(calibratedRed: 0.52, green: 0.38, blue: 0.26, alpha: 0.96)
+        case .corkboard:
+            return NSColor(calibratedRed: 0.94, green: 0.78, blue: 0.35, alpha: 0.96)
+        case .magazine:
+            return NSColor.controlAccentColor
+        }
+    }
+
+    private func themeTitleFont(size: CGFloat) -> NSFont {
+        switch state.widget.theme.style {
+        case .magazine:
+            return displayFont(ofSize: size, weight: .bold)
+        case .kraft:
+            return NSFont(name: "Courier-Bold", size: size) ?? .monospacedSystemFont(ofSize: size, weight: .bold)
+        case .polaroid:
+            return NSFont(name: "AvenirNext-Heavy", size: size)
+                ?? NSFont(name: "ArialRoundedMTBold", size: size)
+                ?? .systemFont(ofSize: size, weight: .heavy)
+        case .collage:
+            return NSFont(name: "Noteworthy-Bold", size: size) ?? displayFont(ofSize: size, weight: .bold)
+        case .corkboard:
+            return NSFont(name: "AvenirNext-DemiBold", size: size) ?? .systemFont(ofSize: size, weight: .bold)
+        }
+    }
+
+    private func themeSecondaryFont(size: CGFloat) -> NSFont {
+        switch state.widget.theme.style {
+        case .kraft:
+            return NSFont(name: "Courier", size: size) ?? .monospacedSystemFont(ofSize: size, weight: .regular)
+        case .polaroid:
+            return NSFont(name: "BradleyHandITCTT-Bold", size: size)
+                ?? NSFont(name: "Noteworthy-Light", size: size)
+                ?? .systemFont(ofSize: size, weight: .medium)
+        case .collage:
+            return NSFont(name: "Noteworthy-Light", size: size) ?? .systemFont(ofSize: size, weight: .medium)
+        default:
+            return .systemFont(ofSize: size, weight: .medium)
+        }
+    }
+
+    private func themeTaskFont(size: CGFloat) -> NSFont {
+        switch state.widget.theme.style {
+        case .kraft:
+            return NSFont(name: "Courier", size: size) ?? .monospacedSystemFont(ofSize: size, weight: .regular)
+        case .polaroid:
+            return NSFont(name: "AvenirNext-Medium", size: size) ?? .systemFont(ofSize: size, weight: .medium)
+        case .collage:
+            return NSFont(name: "Noteworthy", size: size) ?? .systemFont(ofSize: size, weight: .regular)
+        default:
+            return .systemFont(ofSize: size, weight: .regular)
+        }
     }
 
     private func spacer(height: CGFloat) -> NSView {
@@ -1069,6 +1389,13 @@ final class WidgetView: NSView {
         nextState.content.showPrivateNote = inlineShowNoteCheckbox.state == .on
         nextState.content.showTasks = inlineShowTasksCheckbox.state == .on
         nextState.cover.isEnabled = inlineBlurredCheckbox.state == .on
+        let themeIndex = max(0, inlineThemePopup.indexOfSelectedItem)
+        if WidgetTheme.allCases.indices.contains(themeIndex) {
+            nextState.widget.theme.style = WidgetTheme.allCases[themeIndex]
+            if !nextState.widget.theme.style.allowsCustomBackground {
+                nextState.widget.theme.backgroundImagePath = nil
+            }
+        }
         nextState.cover.text = inlineCoverField.stringValue
         nextState.cover.mode = inlineCoverModePopup.indexOfSelectedItem == 0 ? .text : .image
         nextState.pet.kind = inlinePetKindPopup.indexOfSelectedItem == 0 ? .builtIn : .customImage
@@ -1102,8 +1429,23 @@ final class WidgetView: NSView {
             return "玩毛线"
         case .catBox:
             return "纸箱"
-        case .catAngry:
+        case .catCookie:
             return "吃饼干"
+        }
+    }
+
+    private static func widgetThemeTitle(_ theme: WidgetTheme) -> String {
+        switch theme {
+        case .magazine:
+            return "杂志风"
+        case .kraft:
+            return "牛皮纸"
+        case .polaroid:
+            return "拍立得"
+        case .collage:
+            return "拼贴手帐"
+        case .corkboard:
+            return "软木照片墙"
         }
     }
 }

@@ -19,6 +19,8 @@ cp "$ROOT_DIR/Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "$ROOT_DIR/Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 rm -rf "$RESOURCES_DIR/Pets"
 cp -R "$ROOT_DIR/Resources/Pets" "$RESOURCES_DIR/Pets"
+rm -rf "$RESOURCES_DIR/Animations"
+cp -R "$ROOT_DIR/Resources/Animations" "$RESOURCES_DIR/Animations"
 printf "APPL????" > "$CONTENTS_DIR/PkgInfo"
 chmod +x "$MACOS_DIR/MurmurApp"
 xattr -cr "$APP_DIR" >/dev/null 2>&1 || true

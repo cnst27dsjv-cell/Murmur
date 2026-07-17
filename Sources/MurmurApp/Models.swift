@@ -66,6 +66,51 @@ struct ThemeState: Codable {
     var transparency: Double
     var blurStrength: Double
     var cornerRadius: Double
+    var style: WidgetTheme
+    var backgroundImagePath: String?
+
+    init(
+        transparency: Double,
+        blurStrength: Double,
+        cornerRadius: Double,
+        style: WidgetTheme = .magazine,
+        backgroundImagePath: String? = nil
+    ) {
+        self.transparency = transparency
+        self.blurStrength = blurStrength
+        self.cornerRadius = cornerRadius
+        self.style = style
+        self.backgroundImagePath = backgroundImagePath
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case transparency
+        case blurStrength
+        case cornerRadius
+        case style
+        case backgroundImagePath
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        transparency = try container.decode(Double.self, forKey: .transparency)
+        blurStrength = try container.decode(Double.self, forKey: .blurStrength)
+        cornerRadius = try container.decode(Double.self, forKey: .cornerRadius)
+        style = try container.decodeIfPresent(WidgetTheme.self, forKey: .style) ?? .magazine
+        backgroundImagePath = try container.decodeIfPresent(String.self, forKey: .backgroundImagePath)
+    }
+}
+
+enum WidgetTheme: String, Codable, CaseIterable {
+    case magazine
+    case kraft
+    case polaroid
+    case collage
+    case corkboard
+
+    var allowsCustomBackground: Bool {
+        self != .kraft
+    }
 }
 
 struct ContentState: Codable {
@@ -123,30 +168,55 @@ struct TaskItem: Codable, Identifiable {
 
 struct CoverState: Codable {
     var isEnabled: Bool
+    var style: CoverStyle
     var mode: CoverMode
     var text: String
     var imagePath: String?
+    var backgroundImagePath: String?
 
-    init(mode: CoverMode, text: String, imagePath: String?, isEnabled: Bool = true) {
+    init(mode: CoverMode, text: String, imagePath: String?, isEnabled: Bool = true, style: CoverStyle = .glass, backgroundImagePath: String? = nil) {
         self.isEnabled = isEnabled
+        self.style = style
         self.mode = mode
         self.text = text
         self.imagePath = imagePath
+        self.backgroundImagePath = backgroundImagePath
     }
 
     private enum CodingKeys: String, CodingKey {
         case isEnabled
+        case style
         case mode
         case text
         case imagePath
+        case backgroundImagePath
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        style = try container.decodeIfPresent(CoverStyle.self, forKey: .style) ?? .glass
         mode = try container.decode(CoverMode.self, forKey: .mode)
         text = try container.decode(String.self, forKey: .text)
         imagePath = try container.decodeIfPresent(String.self, forKey: .imagePath)
+        backgroundImagePath = try container.decodeIfPresent(String.self, forKey: .backgroundImagePath)
+    }
+}
+
+enum CoverStyle: String, Codable, CaseIterable {
+    case glass
+    case paper
+    case kraft
+    case newspaper
+    case polaroid
+
+    var allowsCustomBackground: Bool {
+        switch self {
+        case .glass, .paper, .polaroid:
+            return true
+        case .kraft, .newspaper:
+            return false
+        }
     }
 }
 
@@ -155,7 +225,7 @@ enum CoverMode: String, Codable, CaseIterable {
     case image
 }
 
-struct PetState: Codable {
+struct PetState: Codable, Equatable {
     var kind: PetKind
     var imagePath: String?
     var edge: PetEdge
@@ -189,13 +259,28 @@ enum PetKind: String, Codable, CaseIterable {
     case customImage
 }
 
-enum PetPose: String, Codable, CaseIterable {
+enum PetPose: String, CaseIterable, Codable {
     case catDefault
     case catSit
     case catSleep
     case catYarn
     case catBox
-    case catAngry
+    case catCookie
+
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        switch value {
+        case "catAngry":
+            self = .catCookie
+        default:
+            self = PetPose(rawValue: value) ?? .catDefault
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 
     var resourceName: String {
         switch self {
@@ -209,8 +294,8 @@ enum PetPose: String, Codable, CaseIterable {
             return "cat_yarn"
         case .catBox:
             return "cat_box"
-        case .catAngry:
-            return "cat_angry"
+        case .catCookie:
+            return "cat_cookie"
         }
     }
 }

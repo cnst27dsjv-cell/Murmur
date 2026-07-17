@@ -4,7 +4,7 @@ import AppKit
 final class WidgetWindowController: NSWindowController, NSWindowDelegate {
     private enum Layout {
         static let collapsedSize = CGSize(width: 136, height: 136)
-        static let expandedSize = CGSize(width: 520, height: 500)
+        static let expandedSize = CGSize(width: 500, height: 500)
         static let edgeInset: CGFloat = 10
     }
 
