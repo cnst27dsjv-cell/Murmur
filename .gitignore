@@ -3,6 +3,14 @@
 .murmur-dev-data/
 .DS_Store
 
+# Local secrets and signing files
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.mobileprovision
+
 # Local packaged builds
 dist/
 03_交付物/*.app
