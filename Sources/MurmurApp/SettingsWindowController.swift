@@ -250,9 +250,18 @@ final class SettingsWindowController: NSWindowController {
 
     @objc private func choosePetImage() {
         guard let path = chooseImagePath() else { return }
-        state.pet.kind = .customImage
-        state.pet.imagePath = path
-        petModePopup.selectItem(at: 1)
+        let sourceURL = URL(fileURLWithPath: path)
+        Task { [weak self] in
+            guard let self else { return }
+            guard let importedPath = await PetImageImporter.importImage(
+                from: sourceURL,
+                presenting: window
+            ) else { return }
+
+            state.pet.kind = .customImage
+            state.pet.imagePath = importedPath
+            petModePopup.selectItem(at: 1)
+        }
     }
 
     @objc private func resetBuiltInPet() {

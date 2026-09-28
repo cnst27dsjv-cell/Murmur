@@ -427,7 +427,13 @@ final class WidgetView: NSView {
 
         if state.content.showMainPhrase {
             let title = NSTextField(labelWithString: mainText)
-            title.font = themeTitleFont(size: sparseContent ? 40 : 30)
+            let titleSize: CGFloat
+            if state.widget.theme.style == .kraft {
+                titleSize = sparseContent ? 32 : 26
+            } else {
+                titleSize = sparseContent ? 40 : 30
+            }
+            title.font = themeTitleFont(size: titleSize)
             title.textColor = themePrimaryTextColor
             title.maximumNumberOfLines = sparseContent ? 2 : 3
             title.lineBreakMode = .byWordWrapping
@@ -512,10 +518,10 @@ final class WidgetView: NSView {
         var didAddContent = false
         if state.content.showMainPhrase {
             let title = NSTextField(labelWithString: mainText)
-            title.font = themeTitleFont(size: mainText.count <= 14 ? 22 : 18)
+            title.font = polaroidTitleFont(for: mainText, width: 172)
             title.textColor = themePrimaryTextColor
-            title.maximumNumberOfLines = 1
-            title.lineBreakMode = .byTruncatingTail
+            title.maximumNumberOfLines = 2
+            title.lineBreakMode = .byWordWrapping
             title.widthAnchor.constraint(equalToConstant: 172).isActive = true
             captionStack.addArrangedSubview(title)
             didAddContent = true
@@ -581,6 +587,37 @@ final class WidgetView: NSView {
         default:
             return (9.5, 12, 0)
         }
+    }
+
+    private func polaroidTitleFont(for text: String, width: CGFloat) -> NSFont {
+        for size in stride(from: CGFloat(20), through: CGFloat(14), by: -1) {
+            let font = themeTitleFont(size: size)
+            let singleLineWidth = ceil((text as NSString).size(withAttributes: [.font: font]).width)
+            if singleLineWidth <= width {
+                return font
+            }
+        }
+
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineBreakMode = .byWordWrapping
+
+        for size in stride(from: CGFloat(18), through: CGFloat(14), by: -1) {
+            let font = themeTitleFont(size: size)
+            let bounds = (text as NSString).boundingRect(
+                with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [
+                    .font: font,
+                    .paragraphStyle: paragraphStyle
+                ]
+            )
+            let twoLineHeight = (font.ascender - font.descender + font.leading) * 2 + 2
+            if bounds.height <= twoLineHeight {
+                return font
+            }
+        }
+
+        return themeTitleFont(size: 14)
     }
 
     @objc private func toggleTask(_ sender: NSButton) {
@@ -766,20 +803,34 @@ final class WidgetView: NSView {
     }
 
     @objc private func chooseInlinePetImage() {
-        var nextState = collectInlineSettings()
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
 
-        guard panel.runModal() == .OK, let path = panel.url?.path else {
+        guard panel.runModal() == .OK, let sourceURL = panel.url else {
             return
         }
 
-        nextState.pet.kind = .customImage
-        nextState.pet.imagePath = path
-        inlineDraftState = nextState
-        inlinePetKindPopup.selectItem(at: 1)
+        inlineUploadPetButton?.isEnabled = false
+        inlineUploadPetButton?.title = "正在自动抠图..."
+
+        Task { [weak self] in
+            guard let self else { return }
+            let importedPath = await PetImageImporter.importImage(
+                from: sourceURL,
+                presenting: window
+            )
+            inlineUploadPetButton?.isEnabled = true
+            inlineUploadPetButton?.title = "上传桌宠图片"
+
+            guard let importedPath else { return }
+            var nextState = collectInlineSettings()
+            nextState.pet.kind = .customImage
+            nextState.pet.imagePath = importedPath
+            inlineDraftState = nextState
+            inlinePetKindPopup.selectItem(at: 1)
+        }
     }
 
     @objc private func clearInlinePetImage() {
@@ -1155,11 +1206,13 @@ final class WidgetView: NSView {
         case .magazine:
             return displayFont(ofSize: size, weight: .bold)
         case .kraft:
-            return NSFont(name: "Courier-Bold", size: size) ?? .monospacedSystemFont(ofSize: size, weight: .bold)
+            return NSFont(name: "Baskerville-SemiBold", size: size)
+                ?? NSFont(name: "AvenirNext-DemiBold", size: size)
+                ?? .systemFont(ofSize: size, weight: .semibold)
         case .polaroid:
-            return NSFont(name: "AvenirNext-Heavy", size: size)
+            return NSFont(name: "AvenirNext-DemiBold", size: size)
                 ?? NSFont(name: "ArialRoundedMTBold", size: size)
-                ?? .systemFont(ofSize: size, weight: .heavy)
+                ?? .systemFont(ofSize: size, weight: .semibold)
         case .collage:
             return NSFont(name: "Noteworthy-Bold", size: size) ?? displayFont(ofSize: size, weight: .bold)
         case .corkboard:

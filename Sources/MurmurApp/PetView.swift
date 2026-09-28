@@ -144,6 +144,15 @@ final class PetView: NSView {
         restoreWorkItem?.cancel()
         restoreWorkItem = nil
 
+        if pet.kind == .customImage {
+            spriteSheetView.stop()
+            animationView.stop()
+            image = pet.imagePath.flatMap { NSImage(contentsOfFile: $0) }
+                ?? Self.builtInImage(for: pet.pose)
+            needsDisplay = true
+            return
+        }
+
         if pet.kind == .builtIn, spriteSheetView.play(pose: pet.pose) {
             animationView.stop()
             image = nil
